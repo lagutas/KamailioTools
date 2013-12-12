@@ -1,0 +1,183 @@
+#!/usr/bin/perl
+
+use strict;
+
+use DBI();
+use Config::IniFiles;
+use POSIX qw(strftime);
+use POSIX;
+
+use Logic::Tools;
+
+# Задаем pid файл и пользователя из под которого запускаем демона
+my $lock_file = '/var/run/dialog_from_kamctl.pid';
+my $runas_user = 'root';
+
+
+my $tools=Logic::Tools->new(config_file	=>	'/etc/kamailio/kamailio-tools.ini',
+							lock_file	=>	$lock_file,
+							runas_user	=>	$runas_user,
+							logfile		=>	'/var/log/dialog_from_kamctl.log');
+
+
+
+my $db_host=$tools->read_config( 'dialog_from_kamctl', 'db_host');
+my $db=$tools->read_config( 'dialog_from_kamctl', 'db');
+my $dialog_from_kamctl_table=$tools->read_config( 'dialog_from_kamctl', 'dialog_from_kamctl_table');
+my $dialog_table=$tools->read_config( 'dialog_from_kamctl', 'dialog_table');
+my $db_user=$tools->read_config( 'dialog_from_kamctl', 'db_user');
+my $db_password=$tools->read_config( 'dialog_from_kamctl', 'db_password');
+my $dlg_list_cmd=$tools->read_config( 'dialog_from_kamctl', 'dlg_list_cmd');
+my $dlg_delete=$tools->read_config( 'dialog_from_kamctl', 'dlg_delete');
+my $dialog_timeout=$tools->read_config( 'dialog_from_kamctl', 'dialog_timeout');
+
+
+################### задаём запросы для БД ##############################
+my %query;
+# insert_dialog - записывает новый dialog в BD 
+$query{'insert_dialog'} = <<EOQ;
+INSERT
+	INTO $db.$dialog_from_kamctl_table
+	(callid,
+	from_uri,
+	to_uri,
+	state,
+	datetime,
+	instert_date)
+VALUES
+	(?,
+	?,
+	?,
+	?,
+	Now(),
+	Now()) 
+ON DUPLICATE KEY UPDATE state=?, datetime=Now();
+EOQ
+
+$query{'get_old_dialog'} = <<EOQ;
+SELECT
+	callid
+FROM
+	$db.$dialog_from_kamctl_table
+WHERE
+	datetime<=Now() - INTERVAL ? SECOND;
+EOQ
+
+$query{'delete_dialog'} = <<EOQ;
+DELETE
+FROM
+	$db.$dialog_from_kamctl_table
+WHERE
+	callid = ?;
+EOQ
+
+$query{'get_state_3_dialog'}=<<EOQ;
+SELECT
+	hash_entry,
+	hash_id,
+	from_uri,
+	to_uri,
+	callid
+FROM
+	$db.$dialog_table
+WHERE
+	state=3;
+EOQ
+
+$query{'count_of_state_3_dialog'} = <<EOF;
+SELECT
+	count(*) as count_of_state_3_dialog
+FROM
+	$db.$dialog_from_kamctl_table
+WHERE
+	callid=? AND
+	state=3 AND
+	instert_date<Now() - INTERVAL 5 MINUTE;
+EOF
+
+#проверка не запущен ли этот процесс
+$tools->check_proc();
+
+#запускаем как демон
+$tools->start_daemon();
+
+my $dbh=DBI->connect("DBI:mysql:$db;host=$db_host",$db_user,$db_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $db_password $!\n";
+$dbh->{mysql_auto_reconnect} = 1;
+while(1)
+{
+	my @data=split("\n",`$dlg_list_cmd`);
+
+	#2013-04-17 19:41:11 dialog::  hash=3025:5039
+	#2013-04-17 19:41:11     state:: 5
+	#2013-04-17 19:41:11     ref_count:: 1
+	#2013-04-17 19:41:11     timestart:: 1366206057
+	#2013-04-17 19:41:11     timeout:: 0
+	#2013-04-17 19:41:11     callid:: ZDRlMzAyOWViNTk5MzRiNTcxNGRmZGNkZGJkMDk3OTM.
+	#2013-04-17 19:41:11     from_uri:: sip:999103@interphone-zlat.is74.ru
+	#2013-04-17 19:41:11     from_tag:: 744c2a69
+	#2013-04-17 19:41:11     caller_contact:: sip:999103@10.100.6.1:58357
+	#2013-04-17 19:41:11     caller_cseq:: 2
+	#2013-04-17 19:41:11     caller_route_set::
+	#2013-04-17 19:41:11     caller_bind_addr:: udp:78.29.0.247:5060
+	#2013-04-17 19:41:11     callee_bind_addr:: udp:78.29.0.247:5060
+	#2013-04-17 19:41:11     to_uri:: sip:echo@interphone-zlat.is74.ru
+	#2013-04-17 19:41:11     to_tag:: as43b2db70
+	#2013-04-17 19:41:11     callee_contact:: sip:echo@78.29.0.249:5060
+	#2013-04-17 19:41:11     callee_cseq:: 2
+	#2013-04-17 19:41:11     callee_route_set::
+
+	my ($callid, $from_uri, $to_uri, $state);
+	foreach(@data)
+	{	
+		if($_=~/^.+state::\s(\d+)$/)
+		{
+			$state=$1;
+		}
+		
+		if($_=~/^.+callid::\s(.+)$/)
+		{
+			$callid=$1;
+		}
+		
+		if($_=~/^.+from_uri::\s(.+)$/)
+		{
+			$from_uri=$1;
+		}
+		
+		if($_=~/^.+to_uri::\s(.+)$/)
+		{
+			$to_uri=$1;
+			$tools->logprint("info","диалог:  $state $callid $from_uri $to_uri ");
+
+			$dbh->do($query{'insert_dialog'},undef,$callid,$from_uri,$to_uri,$state,$state) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'insert_dialog'}");
+		}
+	}
+
+	my $sth=$dbh->prepare($query{'get_old_dialog'});
+	$sth->execute($dialog_timeout) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_old_dialog'}");
+	while(my $callid = $sth->fetchrow_array())
+	{
+		$tools->logprint("info","удаляем диалог:  $callid");	
+		$dbh->do($query{'delete_dialog'},undef,$callid) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'delete_dialog'}");
+	}
+
+	my $sth=$dbh->prepare($query{'get_state_3_dialog'});
+	$sth->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_state_3_dialog'}");
+	while(my $ref = $sth->fetchrow_hashref())
+	{
+		$tools->logprint("error","найден диалог c статусом 3:  $ref->{hash_entry}, $ref->{hash_id}, $ref->{from_uri}, $ref->{to_uri}");
+		my $kdfk_request=$dbh->prepare($query{'count_of_state_3_dialog'} );
+		$kdfk_request->execute($ref->{callid}) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'count_of_state_3_dialog'}");
+		my $kdfk_ref=$kdfk_request->fetchrow_hashref();
+		if($kdfk_ref->{count_of_state_3_dialog}>0)
+		{
+			my $result=`$dlg_delete $ref->{hash_entry} $ref->{hash_id}`;
+			chomp($result);
+			$tools->logprint("info","найден диалог c статусом 3:  $ref->{hash_entry}, $ref->{hash_id}, $ref->{from_uri}, $ref->{to_uri}, результат удаления $result")
+		}
+		$kdfk_request->finish();
+		
+	}
+
+	sleep(1);
+}
