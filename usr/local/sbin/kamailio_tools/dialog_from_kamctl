@@ -1,13 +1,17 @@
 #!/usr/bin/perl
 
 use strict;
+use warnings;
 
 use DBI();
 use Config::IniFiles;
 use POSIX qw(strftime);
 use POSIX;
+use Term::ReadKey;
 
 use Logic::Tools;
+
+
 
 # Задаем pid файл и пользователя из под которого запускаем демона
 my $lock_file = '/var/run/dialog_from_kamctl.pid';
@@ -30,6 +34,7 @@ my $db_password=$tools->read_config( 'dialog_from_kamctl', 'db_password');
 my $dlg_list_cmd=$tools->read_config( 'dialog_from_kamctl', 'dlg_list_cmd');
 my $dlg_delete=$tools->read_config( 'dialog_from_kamctl', 'dlg_delete');
 my $dialog_timeout=$tools->read_config( 'dialog_from_kamctl', 'dialog_timeout');
+my $location_table=$tools->read_config( 'dialog_from_kamctl', 'location_table');
 
 
 ################### задаём запросы для БД ##############################
@@ -40,12 +45,16 @@ INSERT
 	INTO $db.$dialog_from_kamctl_table
 	(callid,
 	from_uri,
+	from_username,
 	to_uri,
+	to_username,
 	state,
 	datetime,
 	instert_date)
 VALUES
 	(?,
+	?,
+	?,
 	?,
 	?,
 	?,
@@ -95,10 +104,157 @@ WHERE
 	instert_date<Now() - INTERVAL 5 MINUTE;
 EOF
 
+$query{'get_from_username_calls'} = <<EOF;
+SELECT
+	from_username as username,
+	count(*) as simultaneous_calls
+FROM
+	$db.$dialog_from_kamctl_table
+WHERE
+	state!=3 AND state!=5
+group by from_username;
+EOF
+
+$query{'get_to_username_calls'} = <<EOF;
+SELECT
+	to_username as username,
+	count(*) as simultaneous_calls
+FROM
+	$db.$dialog_from_kamctl_table
+WHERE
+	state!=3 AND state!=5
+group by to_username;
+EOF
+
+$query{'update_simultaneous_calls'} = <<EOF;
+UPDATE
+	$db.$location_table
+SET
+	simultaneous_calls=?
+WHERE
+	username=?;
+EOF
+
+$query{'get_location_with_calls'} = <<EOF;
+SELECT
+	username,
+	simultaneous_calls
+FROM
+	$db.$location_table
+WHERE
+	simultaneous_calls>0;
+EOF
+
+$query{'check_dialog'} = <<EOF;
+SELECT
+	count(*) as simultaneous_calls
+FROM
+	$db.$dialog_from_kamctl_table
+WHERE
+	(from_username=? OR
+	to_username=?) AND
+	state!=3 AND state!=5;
+EOF
+
+#таблицы для инициализации BD
+$query{'simultaneous_calls'} = <<EOF;
+SELECT
+	COLUMN_NAME
+FROM
+	information_schema.COLUMNS
+WHERE
+	TABLE_SCHEMA='$db' AND
+	TABLE_NAME='location' AND
+	COLUMN_NAME='simultaneous_calls';
+EOF
+
+$query{'add_simultaneous_calls_column'} = <<EOF;
+ALTER
+TABLE `kamailio`.`location` 
+ADD COLUMN `simultaneous_calls` INT(10) NULL DEFAULT 0 AFTER `reg_id`;
+EOF
+
+$query{'check_dialog_from_kamctl'} = <<EOF;
+SELECT
+	TABLE_NAME
+FROM
+	information_schema.TABLES
+WHERE
+	TABLE_SCHEMA='kamailio' AND
+	TABLE_NAME='dialog_from_kamctl';
+EOF
+
+$query{'create_dialog_from_kamctl'} = <<EOF;
+CREATE TABLE `dialog_from_kamctl` (
+  `callid` varchar(100) NOT NULL,
+  `from_uri` varchar(100) NOT NULL,
+  `from_username` varchar(100) NOT NULL,
+  `to_uri` varchar(100) NOT NULL,
+  `to_username` varchar(100) NOT NULL,
+  `state` int(11) NOT NULL COMMENT '2 - предответное\n4 - разговорв\n5 - отбой',
+  `datetime` datetime NOT NULL,
+  `instert_date` datetime NOT NULL,
+  PRIMARY KEY (`callid`),
+  KEY `from_uri` (`from_uri`),
+  KEY `to_uri` (`to_uri`),
+  KEY `state` (`state`),
+  KEY `datetime` (`datetime`),
+  KEY `instert_date` (`instert_date`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8 COMMENT='таблица для данных из kamctl по диалогам во всех состояниях';
+EOF
+
+#инициализация схемы
+my $create = shift;
+
+if( defined($create) && $create eq "dbinit")
+{
+	print "Адаптация схемы $db, введите root пароль:";
+	
+	ReadMode('noecho');
+	chomp(my $root_password = <STDIN>);
+	ReadMode(0);
+	print "\n";
+
+	my $dbh_db_init=DBI->connect("DBI:mysql:$db;host=$db_host","root",$root_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $db_password $!\n";
+	
+	my $sth=$dbh_db_init->prepare($query{'simultaneous_calls'});
+	$sth->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'simultaneous_calls'}");
+	my $column = $sth->fetchrow_array();
+	$sth->finish();
+	if(!defined($column))
+	{
+		print "Таблица $db.locations не содержит поле simultaneous_calls\n";
+		$dbh_db_init->do($query{'add_simultaneous_calls_column'}) or die "Error: не удается выполнить запрос $query{'add_simultaneous_calls_column'} $!\n";
+	}
+	else
+	{
+		print "Таблица $db.locations содержит поле simultaneous_calls\n";
+	}
+
+	$sth=$dbh_db_init->prepare($query{'check_dialog_from_kamctl'});
+	$sth->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'check_dialog_from_kamctl'}");
+	my $check_dialog_from_kamctl = $sth->fetchrow_array();
+	$sth->finish();
+	if(!defined($check_dialog_from_kamctl))
+	{
+		print "Таблица $db.dialog_from_kamctl не существует\n";
+		$dbh_db_init->do($query{'create_dialog_from_kamctl'}) or die "Error: не удается выполнить запрос $query{'create_dialog_from_kamctl'} $!\n";
+	}
+	else
+	{
+		print "Таблица $db.dialog_from_kamctl существует\n";
+	}
+
+
+	$dbh_db_init->disconnect;
+	exit;
+}
+
 #проверка не запущен ли этот процесс
 $tools->check_proc();
 
 #запускаем как демон
+$tools->logprint("info","старт программы");
 $tools->start_daemon();
 
 my $dbh=DBI->connect("DBI:mysql:$db;host=$db_host",$db_user,$db_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $db_password $!\n";
@@ -126,7 +282,7 @@ while(1)
 	#2013-04-17 19:41:11     callee_cseq:: 2
 	#2013-04-17 19:41:11     callee_route_set::
 
-	my ($callid, $from_uri, $to_uri, $state);
+	my ($callid, $from_uri, $from_username, $to_uri, $to_username, $state);
 	foreach(@data)
 	{	
 		if($_=~/^.+state::\s(\d+)$/)
@@ -142,17 +298,62 @@ while(1)
 		if($_=~/^.+from_uri::\s(.+)$/)
 		{
 			$from_uri=$1;
+			$from_username=$from_uri;
+			$from_username=~s/^sip:(.+)\@.+$/$1/;
 		}
 		
 		if($_=~/^.+to_uri::\s(.+)$/)
 		{
 			$to_uri=$1;
-			$tools->logprint("info","диалог:  $state $callid $from_uri $to_uri ");
 
-			$dbh->do($query{'insert_dialog'},undef,$callid,$from_uri,$to_uri,$state,$state) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'insert_dialog'}");
-		}
+			$to_username=$to_uri;
+			$to_username=~s/^sip:(.+)\@.+$/$1/;
+
+			$tools->logprint("info","диалог:  $state $callid $from_uri $from_username $to_uri $to_username");
+			$dbh->do($query{'insert_dialog'},undef,$callid,$from_uri,$from_username,$to_uri,$to_username,$state,$state) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'insert_dialog'}");
+
+
+		}	
 	}
 
+	#обновляем количество активных сессий у UA
+
+	my $sessions=$dbh->prepare($query{'get_from_username_calls'});
+	$sessions->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_from_username_calls'}");
+	while (my $sessions_ref=$sessions->fetchrow_hashref()) 
+	{
+		$dbh->do($query{'update_simultaneous_calls'},undef,$sessions_ref->{simultaneous_calls},$sessions_ref->{username}) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'update_simultaneous_calls'}");
+	}
+	$sessions->finish();
+
+	$sessions=$dbh->prepare($query{'get_to_username_calls'});
+	$sessions->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_from_username_calls'}");
+	while (my $sessions_ref=$sessions->fetchrow_hashref()) 
+	{
+		$dbh->do($query{'update_simultaneous_calls'},undef,$sessions_ref->{simultaneous_calls},$sessions_ref->{username}) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'update_simultaneous_calls'}");	
+	}
+	$sessions->finish();
+
+	#проверяем есть ли UA с нулевым количеством разговоров
+	my $location=$dbh->prepare($query{'get_location_with_calls'});
+	$location->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_location_with_calls'}");
+	while (my $location_ref=$location->fetchrow_hashref())
+	{
+		
+		my $check_dialog=$dbh->prepare($query{'check_dialog'});
+		$check_dialog->execute($location_ref->{username},$location_ref->{username}) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'check_dialog'}");
+		my $simultaneous_calls=$check_dialog->fetchrow_array();
+		
+		if($simultaneous_calls==0)
+		{
+			$tools->logprint("info","обнуляем счетчик у $location_ref->{username}");
+			$dbh->do($query{'update_simultaneous_calls'},undef,0,$location_ref->{username}) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'update_simultaneous_calls'}");	
+		}
+		$check_dialog->finish();
+	}
+	$location->finish();
+
+	#ищем старые диалои
 	my $sth=$dbh->prepare($query{'get_old_dialog'});
 	$sth->execute($dialog_timeout) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_old_dialog'}");
 	while(my $callid = $sth->fetchrow_array())
@@ -160,8 +361,9 @@ while(1)
 		$tools->logprint("info","удаляем диалог:  $callid");	
 		$dbh->do($query{'delete_dialog'},undef,$callid) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'delete_dialog'}");
 	}
+	$sth->finish();
 
-	my $sth=$dbh->prepare($query{'get_state_3_dialog'});
+	$sth=$dbh->prepare($query{'get_state_3_dialog'});
 	$sth->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'get_state_3_dialog'}");
 	while(my $ref = $sth->fetchrow_hashref())
 	{
@@ -178,6 +380,6 @@ while(1)
 		$kdfk_request->finish();
 		
 	}
-
+	$sth->finish();
 	sleep(1);
 }

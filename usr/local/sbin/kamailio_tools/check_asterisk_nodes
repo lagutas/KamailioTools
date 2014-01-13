@@ -24,6 +24,7 @@ my $tools=Logic::Tools->new(config_file	=>	'/etc/kamailio/kamailio-tools.ini',
 
 my $db_host=$tools->read_config( 'check_asterisk_nodes', 'db_host');
 my $db=$tools->read_config( 'check_asterisk_nodes', 'db');
+my $dialog_from_kamctl_table=$tools->read_config( 'check_asterisk_nodes', 'dialog_from_kamctl_table');
 my $db_user=$tools->read_config( 'check_asterisk_nodes', 'db_user');
 my $db_password=$tools->read_config( 'check_asterisk_nodes', 'db_password');
 my $my_host=$tools->read_config('check_asterisk_nodes','my_host');
