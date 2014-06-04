@@ -37,15 +37,16 @@
 #fork_limit		=	50
 
 
-
 use strict;
+use warnings;
+
 
 $SIG{CHLD} = 'IGNORE';
 
 use DBI();
 use Time::HiRes qw(gettimeofday tv_interval);
-#use POSIX qw(strftime);
-#use POSIX;
+use POSIX qw(strftime);
+use POSIX;
 use Term::ReadKey;
 
 use Logic::Tools;
@@ -69,17 +70,13 @@ my $sipsak_path=$tools->read_config( 'check_locations', 'sipsak_path');
 my $kamailio_domain=$tools->read_config( 'check_locations', 'kamailio_domain');
 my $fork_limit=$tools->read_config( 'check_locations', 'fork_limit');
 
-$tools->check_proc();
 
-$tools->start_daemon();
-
-$tools->logprint("info","start check_location");
 
 ################### задаём запросы для БД ##############################
 my %query;
 
 #запрос на получение пиров
-$query{'get_peers'} = <<EOQ;
+$query{'get_peers'} = <<EOF;
 SELECT
 	username
 FROM
@@ -90,20 +87,20 @@ WHERE
 	qualify_check IS NULL
 ORDER BY qualify_date
 LIMIT ?;
-EOQ
+EOF
 
 #запрос на выставление флага сигнализирующего о начале проверки пира
-$query{'set_peers_qualify_check'} = <<EOQ;
+$query{'set_peers_qualify_check'} = <<EOF;
 UPDATE
 	$db.$location_table
 SET
 	qualify_check=1
 WHERE
 	username=?;
-EOQ
+EOF
 
 #запрос на выставление резултата измерений
-$query{'set_measurement_result'} = <<EOQ;
+$query{'set_measurement_result'} = <<EOF;
 UPDATE
 	$db.$location_table
 SET
@@ -112,29 +109,29 @@ SET
 	qualify_time=?
 WHERE
 	username=?;
-EOQ
+EOF
 
 
 #запрос на получение пиров не обновлявшихся 5 интервалов подряд
-$query{'get_freeze_measurement'} = <<EOQ;
+$query{'get_freeze_measurement'} = <<EOF;
 SELECT
 	username
 FROM
 	$db.$location_table
 WHERE
 	qualify_check=1 AND
-	qualify_date<=? - INTERVAL ? SECOND;
-EOQ
+	(qualify_date<=? - INTERVAL ? SECOND) OR qualify_date is NULL;
+EOF
 
 #сброс замершего измерения
-$query{'reset_freeze_measurement'} = <<EOQ;
+$query{'reset_freeze_measurement'} = <<EOF;
 UPDATE
 	$db.$location_table
 SET
 	qualify_check=NULL
 WHERE
 	username=?;
-EOQ
+EOF
 
 
 
@@ -253,8 +250,12 @@ if( defined($create) && $create eq "dbinit")
 	}
 
 	$dbh_db_init->disconnect;
-	exit;	
+	exit;
 }
+
+$tools->check_proc();
+$tools->start_daemon();
+$tools->logprint("info","start check_location");
 
 my $dbh=DBI->connect("DBI:mysql:$db;host=$db_host",$db_user,$db_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $!\n";
 $dbh->{mysql_auto_reconnect} = 1;
@@ -307,6 +308,8 @@ while(1)
 			my $subprocess_pid=fork;
 			if($subprocess_pid == 0)
 			{
+				my $dbh_fork=DBI->connect("DBI:mysql:$db;host=$db_host",$db_user,$db_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $!\n";
+
 				my $start_time= [ gettimeofday ];
 				my $sipsak="$sipsak_path -v -s sip:".$sip_peers_hash->{'username'}."@".$kamailio_domain;
 				my @options=`$sipsak`;
@@ -317,16 +320,17 @@ while(1)
 				{
 		    		$tools->logprint("info","результат измерения задержки на options запрос, пользователь: $sip_peers_hash->{'username'}, задержка: $elapsed");
 
-		    		$dbh->do($query{set_measurement_result},undef,$elapsed,$sip_peers_hash->{'username'})
+		    		$dbh_fork->do($query{set_measurement_result},undef,$elapsed,$sip_peers_hash->{'username'})
 		    		or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_measurement_result'}");
 				}
 				else
 				{
 					$tools->logprint("info","пользователь: $sip_peers_hash->{'username'} не ответил");
 
-		    		$dbh->do($query{set_measurement_result},undef,-1,$sip_peers_hash->{'username'})
+		    		$dbh_fork->do($query{set_measurement_result},undef,-1,$sip_peers_hash->{'username'})
 		    		or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_measurement_result'}");
 				}
+				$dbh_fork->disconnect();
 				exit;
 			}
 			else
@@ -345,7 +349,7 @@ while(1)
 	$sth->execute($date,$check_timeout*5);
 	while(my $sip_peers_hash=$sth->fetchrow_hashref())
 	{
-		$tools->logprint("info","-------- $sip_peers_hash->{'username'} получен пир который давно не обновлялся, сбрасываею его");
+		$tools->logprint("info","-------- $sip_peers_hash->{'username'} получен пир который давно не обновлялся, сбрасываю его");
 		$dbh->do($query{reset_freeze_measurement},undef,$sip_peers_hash->{'username'})
 		or $tools->logprint("error","Error: ошибка выполнения запроса $query{'reset_freeze_measurement'}");
 	}
@@ -353,5 +357,3 @@ while(1)
 	
 	sleep(1);
 }
-
-
