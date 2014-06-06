@@ -38,7 +38,6 @@
 
 
 use strict;
-use warnings;
 
 
 $SIG{CHLD} = 'IGNORE';
@@ -269,49 +268,51 @@ while(1)
 	my $date=sprintf("%04d-%02d-%02d %02d:%02d:%02d",$year+1900,$mon+1,$day,$hour,$min,$sec);
 
 	
-	#проверка живых пидов
-	for(my $i=0;$i<=scalar(@forks_pid)-1;$i++)
-    {
-    	if(!-e "/proc/$forks_pid[$i]")
-        {
-			#$tools->logprint("info","форк $forks_pid[$i] завершил свою работу, удаляем его");
-			#удаление пида форка из процессов
-			delete  $forks_pid[$i];	
-		}
-	}
+	
 
 
 
-	#если количество форков превышает заданный лимит
-	my $num_of_fork=scalar(@forks_pid);
-	if($num_of_fork>=$fork_limit)
+	#получение пиров для измерения
+	my $sth=$dbh->prepare($query{'get_peers'});
+	$sth->execute($date,$check_timeout,$fork_limit);
+	while(my $sip_peers_hash=$sth->fetchrow_hashref())
 	{
-		$tools->logprint("info","допустимое количество форков превышено ($num_of_fork > $fork_limit)");
-	}
-	else
-	{
-		#получение пиров для измерения
-		my $sth=$dbh->prepare($query{'get_peers'});
-		$sth->execute($date,$check_timeout,$fork_limit);
-
-		while(my $sip_peers_hash=$sth->fetchrow_hashref())
+		#если количество форков превышает заданный лимит
+		my $num_of_fork=scalar(@forks_pid);
+		if($num_of_fork>=$fork_limit)
 		{
+			$tools->logprint("info","допустимое количество форков превышено ($num_of_fork > $fork_limit)");
 
+			#проверка живых пидов
+			for(my $i=0;$i<=scalar(@forks_pid)-1;$i++)
+		    {
+		    	if(!-e "/proc/$forks_pid[$i]")
+		        {
+					#$tools->logprint("info","форк $forks_pid[$i] завершил свою работу, удаляем его");
+					#удаление пида форка из процессов
+					delete  $forks_pid[$i];	
+				}
+			}
 
-			$tools->logprint("info","-------- $sip_peers_hash->{'username'} измерение задержки на OPTIONS запрос");
-
-			#выставляем пометку пиру, что идет опрос пира
-			$dbh->do($query{set_peers_qualify_check},undef,$sip_peers_hash->{'username'}) 
-			or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_peers_qualify_check'}");
-
+			sleep(1);
+			redo;
+		}
+		else
+		{
 			#измерения проводим в форке, чтобы не блокировать работу если один из пиров станет недоступным
 			my $subprocess_pid=fork;
 			if($subprocess_pid == 0)
 			{
 				my $dbh_fork=DBI->connect("DBI:mysql:$db;host=$db_host",$db_user,$db_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $!\n";
+				$tools->logprint("info","-------- $sip_peers_hash->{'username'} измерение задержки на OPTIONS запрос");
+				#выставляем пометку пиру, что идет опрос пира
+				$dbh_fork->do($query{set_peers_qualify_check},undef,$sip_peers_hash->{'username'}) 
+				or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_peers_qualify_check'}");
 
 				my $start_time= [ gettimeofday ];
 				my $sipsak="$sipsak_path -v -s sip:".$sip_peers_hash->{'username'}."@".$kamailio_domain;
+				$tools->logprint("info","запрос $sipsak");
+				
 				my @options=`$sipsak`;
 				my $end_time = [ gettimeofday ];
 				my $answer = $options[0];
@@ -319,16 +320,14 @@ while(1)
 				if ($answer =~ m/.*200 OK.*/)
 				{
 		    		$tools->logprint("info","результат измерения задержки на options запрос, пользователь: $sip_peers_hash->{'username'}, задержка: $elapsed");
-
 		    		$dbh_fork->do($query{set_measurement_result},undef,$elapsed,$sip_peers_hash->{'username'})
 		    		or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_measurement_result'}");
 				}
 				else
 				{
 					$tools->logprint("info","пользователь: $sip_peers_hash->{'username'} не ответил");
-
 		    		$dbh_fork->do($query{set_measurement_result},undef,-1,$sip_peers_hash->{'username'})
-		    		or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_measurement_result'}");
+			  		or $tools->logprint("error","Error: ошибка выполнения запроса $query{'set_measurement_result'}");
 				}
 				$dbh_fork->disconnect();
 				exit;
@@ -337,11 +336,9 @@ while(1)
 			{
 				push(@forks_pid,$subprocess_pid);
 			}
-
 		}
-		$sth->finish();
 	}
-
+	$sth->finish();
 	
 
 	#получение пиров, которые давно не обновлялись
