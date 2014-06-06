@@ -1,5 +1,6 @@
 #!/usr/bin/perl
 
+# Version 1.0
 #скрипт для измререния времени ответа от SIP URI через kamailio, используется sipsak
 #sipsak -> kamailio -> SIP URI -> kamailio -> check_location
 #для корректной работы надо добавить правило обработки в kamailio 
@@ -7,7 +8,7 @@
 #{
 #		#!ifdef VERBOSE_LOG
 #		xlog("L_INFO", "OPTIONS detect:M=$rm RURI=$ru F=$fu T=$tu IP=$si destination - $rd\n");
-#		#!endif<----->
+#		#!endif
 #		if(from_uri=~"sip:sipsak@.+")
 #		{
 #				xlog("L_INFO", "OPTIONS from sipsak:M=$rm RURI=$ru F=$fu T=$tu IP=$si destination - $rd\n");
@@ -298,7 +299,7 @@ while(1)
 
 			#проверка живых пидов
 			sleep(1);
-			redo;
+			last;
 		}
 		else
 		{
