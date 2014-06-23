@@ -31,7 +31,7 @@ my $my_host=$tools->read_config('check_asterisk_nodes','my_host');
 my $sip_port=$tools->read_config('check_asterisk_nodes','sip_port');
 my $sip_user=$tools->read_config('check_asterisk_nodes','sip_user');
 my $sip_secret=$tools->read_config('check_asterisk_nodes','sip_secret');
-my $setid=$tools->read_config('check_asterisk_nodes','setid');
+my $setids=$tools->read_config('check_asterisk_nodes','setid');
 my $dispatcher_reload=$tools->read_config('check_asterisk_nodes','dispatcher_reload');
 my $timeout=$tools->read_config('check_asterisk_nodes','timeout');
 
@@ -88,67 +88,72 @@ $tools->logprint("info","вход в цикл");
 
 while(1)
 {
-	my $asterisk_nodes=get_asterisk_param();
-	
-	$tools->logprint("info","================== начинаем проверочный цикл=====================");
-	
-	foreach my $key (keys 	%$asterisk_nodes)
+	foreach(split(/,/,$setids))
 	{
-		$tools->logprint("info","seid $key - $$asterisk_nodes{$key}->{SETID}");
-		$tools->logprint("info","setid_previous $key - $$asterisk_nodes{$key}->{SETID_PREVIOUS}");
-		$tools->logprint("info","status $key - $$asterisk_nodes{$key}->{STATUS}");
-
-		if($$asterisk_nodes{$key}->{SETID}==$$asterisk_nodes{$key}->{SETID_PREVIOUS})
+		my $setid=$_;
+		my $asterisk_nodes=get_asterisk_param($setid);
+	
+		$tools->logprint("info","================== начинаем проверочный цикл=====================");
+		
+		foreach my $key (keys 	%$asterisk_nodes)
 		{
-			$tools->logprint("info","$key в балансировке");
-			if($$asterisk_nodes{$key}->{STATUS}==0||$$asterisk_nodes{$key}->{STATUS}==2)
+			$tools->logprint("info","seid $key - $$asterisk_nodes{$key}->{SETID}");
+			$tools->logprint("info","setid_previous $key - $$asterisk_nodes{$key}->{SETID_PREVIOUS}");
+			$tools->logprint("info","status $key - $$asterisk_nodes{$key}->{STATUS}");
+
+			if($$asterisk_nodes{$key}->{SETID}==$$asterisk_nodes{$key}->{SETID_PREVIOUS})
 			{
-				$tools->logprint("info","выводим $key из балансировки");
-				$tools->logprint("warning","выводим $key из балансировки");
-				#выводим
-				$dbh->do($query{'asterisk_disable'},undef,$key,$setid);
+				$tools->logprint("info","$key в балансировке");
+				if($$asterisk_nodes{$key}->{STATUS}==0||$$asterisk_nodes{$key}->{STATUS}==2)
+				{
+					$tools->logprint("info","выводим $key из балансировки");
+					$tools->logprint("warning","выводим $key из балансировки $key $setid");
+					#выводим
+					$dbh->do($query{'asterisk_disable'},undef,$key,$setid);
 
-				$tools->logprint("info","выполняем команду $dispatcher_reload");
-				my $result=`$dispatcher_reload`;
-				$tools->logprint("info","результа выполнения $result");
+					$tools->logprint("info","выполняем команду $dispatcher_reload");
+					my $result=`$dispatcher_reload`;
+					$tools->logprint("info","результа выполнения $result");
+				}
+
+				#проверяем регистрацию и выводим из балансировки по необходимости
+				my $status=check_register($my_host,$sip_port,$sip_user,$sip_secret,$$asterisk_nodes{$key}->{DESTINATION});
+				$tools->logprint("info","статус регистрации = $status");
+
+				if(!defined($status))
+				{
+					$tools->logprint("warning","регистрация неуспешна, необходимо вывести $key из балансировки");
+					$dbh->do($query{'asterisk_set_disable_status'},undef,$key,$setid);
+				}
 			}
-
-			#проверяем регистрацию и выводим из балансировки по необходимости
-			my $status=check_register($my_host,$sip_port,$sip_user,$sip_secret,$$asterisk_nodes{$key}->{DESTINATION});
-			$tools->logprint("info","статус регистрации = $status");
-
-			if(!defined($status))
+			else
 			{
-				$tools->logprint("warning","регистрация неуспешна, необходимо вывести $key из балансировки");
-				$dbh->do($query{'asterisk_set_disable_status'},undef,$key,$setid);
+				if($$asterisk_nodes{$key}->{STATUS}==1)
+				{
+					$tools->logprint("warning","вводим $key в балансировку");
+					#вводим
+					$dbh->do($query{'asterisk_enable'},undef,$key,$setid);
+					$tools->logprint("info","выполняем команду $dispatcher_reload");
+					sleep(1);
+					my $result=`$dispatcher_reload`;
+					$tools->logprint("info","результа выполнения $result");
+				}
+
+				#проверяем регистрацию и вводим в балансировки по необходимости
+				my $status=check_register($my_host,$sip_port,$sip_user,$sip_secret,$$asterisk_nodes{$key}->{DESTINATION});
+				$tools->logprint("info","статус регистрации = $status");
+
+				if(defined($status)&&$$asterisk_nodes{$key}->{STATUS}==2)
+				{
+					$tools->logprint("debug","регистрация успешна, необходимо ввести $key в балансировку");
+					$dbh->do($query{'asterisk_set_enable_status'},undef,$key,$setid);
+				}
+
+
 			}
-		}
-		else
-		{
-			if($$asterisk_nodes{$key}->{STATUS}==1)
-			{
-				$tools->logprint("warning","вводим $key в балансировку");
-				#вводим
-				$dbh->do($query{'asterisk_enable'},undef,$key,$setid);
-				$tools->logprint("info","выполняем команду $dispatcher_reload");
-				sleep(1);
-				my $result=`$dispatcher_reload`;
-				$tools->logprint("info","результа выполнения $result");
-			}
-
-			#проверяем регистрацию и вводим в балансировки по необходимости
-			my $status=check_register($my_host,$sip_port,$sip_user,$sip_secret,$$asterisk_nodes{$key}->{DESTINATION});
-			$tools->logprint("info","статус регистрации = $status");
-
-			if(defined($status)&&$$asterisk_nodes{$key}->{STATUS}==2)
-			{
-				$tools->logprint("debug","регистрация успешна, необходимо ввести $key в балансировку");
-				$dbh->do($query{'asterisk_set_enable_status'},undef,$key,$setid);
-			}
-
-
-		}
+		}	
 	}
+	
 
 	$tools->logprint("info","\n\n\n");
 	sleep($timeout);
@@ -185,11 +190,13 @@ sub check_register
 
 sub get_asterisk_param
 {
+	my $setid=shift;
 
 	my %asterisk_nodes;
 
 	my $asterisk_nodes_request=$dbh->prepare($query{'get_asterisk_nodes'});
 
+	#$asterisk_nodes_request->execute();
 	$asterisk_nodes_request->execute($setid);
 
 	#получаем настройки
@@ -201,6 +208,7 @@ sub get_asterisk_param
 		$asterisk_nodes{$ref->{description}}->{DESTINATION}=$ref->{destination};
 		
 	}
+	$asterisk_nodes_request->finish();
 
 	return \%asterisk_nodes;
 }
