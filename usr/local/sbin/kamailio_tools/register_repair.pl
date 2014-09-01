@@ -1,5 +1,16 @@
 #!/usr/bin/perl
 
+#kamailio-tools.ini
+#[repair_register]
+#db_host			=	localhost
+#db 				=	kamailio
+#location_table 	=	location
+#db_user			=	kamailio
+#db_password		=	kamailiorw
+#ul_show_cmd		=	/usr/sbin/kamctl online
+#ul_rm_cmd		=	/usr/sbin/kamctl ul rm
+#domain			=	sip.zadarma.com
+
 use strict;
 use DBI();
 use Logic::Tools;
