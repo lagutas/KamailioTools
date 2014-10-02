@@ -55,18 +55,22 @@ $dbh->{mysql_auto_reconnect} = 1;
 foreach(split("\n",`$ul_show_cmd`))
 {
 	chomp;
-	my $sth=$dbh->prepare($query{'check_location'});
 
-	$sth->execute($_);
-	my $count_of_reg=$sth->fetchrow_array();
-	
-	if($count_of_reg==0)
+	if($_=~/^[\d\-]+$/)
 	{
-		my $cmd=$ul_rm_cmd." ".$_."@".$domain;
-		$tools->logprint("warning","$_ - количество регистраций: $count_of_reg, рассинхронизация, выполняем $cmd");
-		`$cmd`;
+		my $sth=$dbh->prepare($query{'check_location'});
+
+		$sth->execute($_);
+		my $count_of_reg=$sth->fetchrow_array();
+		
+		if($count_of_reg==0)
+		{
+			my $cmd=$ul_rm_cmd." ".$_."@".$domain;
+			$tools->logprint("warning","$_ - количество регистраций: $count_of_reg, рассинхронизация, выполняем $cmd");
+			`$cmd`;
+		}
+		$sth->finish();
 	}
-	$sth->finish();
 }
 
 $dbh->disconnect();
