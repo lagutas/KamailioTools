@@ -268,16 +268,8 @@ while(1)
 	my ($sec, $min, $hour, $day, $mon, $year) = ( localtime(time) )[0,1,2,3,4,5];
 	my $date=sprintf("%04d-%02d-%02d %02d:%02d:%02d",$year+1900,$mon+1,$day,$hour,$min,$sec);
 
-	for(my $i=0;$i<=scalar(@forks_pid)-1;$i++)
-	{
-	  	if(!-e "/proc/$forks_pid[$i]")
-	    {
-			$tools->logprint("info","форк $forks_pid[$i] завершил свою работу, удаляем его");
-			#удаление пида форка из процессов
-			delete  $forks_pid[$i];	
-		}
-	}
-	
+	$tools->logprint("info","обновляем массив форков");
+	decrement_old_forks();
 
 
 	#$tools->logprint("info","$query{'get_peers'} -----------------1--------------------");
@@ -361,4 +353,18 @@ while(1)
 	$sth->finish();
 	
 	sleep(1);
+}
+
+
+sub decrement_old_forks
+{
+	for(my $i=0;$i<=scalar(@forks_pid)-1;$i++)
+	{
+	  	if(!-e "/proc/$forks_pid[$i]")
+	    {
+			$tools->logprint("info","форк $forks_pid[$i] завершил свою работу, удаляем его");
+			#удаление пида форка из процессов
+			splice(@forks_pid,$i,1)
+		}
+	}
 }
