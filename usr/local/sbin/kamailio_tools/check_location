@@ -205,6 +205,7 @@ if( defined($create) && $create eq "dbinit")
 	print "\n";
 
 	my $dbh_db_init=DBI->connect("DBI:mysql:$db;host=$db_host","root",$root_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $db_password $!\n";
+	$dbh_db_init->{mysql_auto_reconnect} = 1;
 	
 	my $sth=$dbh_db_init->prepare($query{'qualify_date'});
 	$sth->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'qualify_date'}");
@@ -300,6 +301,7 @@ while(1)
 			if($subprocess_pid == 0)
 			{
 				my $dbh_fork=DBI->connect("DBI:mysql:$db;host=$db_host",$db_user,$db_password) or die "Error: не удается подключиться к базе данных $db $db_host $db_user $!\n";
+				$dbh_fork->{mysql_auto_reconnect} = 1;
 				$tools->logprint("info","-------- $sip_peers_hash->{'username'} измерение задержки на OPTIONS запрос");
 				#выставляем пометку пиру, что идет опрос пира
 				$dbh_fork->do($query{set_peers_qualify_check},undef,$sip_peers_hash->{'username'}) 

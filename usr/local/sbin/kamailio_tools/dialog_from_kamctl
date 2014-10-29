@@ -157,6 +157,7 @@ WHERE
 EOF
 
 #таблицы для инициализации BD
+#проверка существоания колонки в таблице
 $query{'simultaneous_calls'} = <<EOF;
 SELECT
 	COLUMN_NAME
@@ -164,14 +165,15 @@ FROM
 	information_schema.COLUMNS
 WHERE
 	TABLE_SCHEMA='$db' AND
-	TABLE_NAME='location' AND
+	TABLE_NAME='$location_table' AND
 	COLUMN_NAME='simultaneous_calls';
 EOF
 
 $query{'add_simultaneous_calls_column'} = <<EOF;
 ALTER
-TABLE `kamailio`.`location` 
-ADD COLUMN `simultaneous_calls` INT(10) NULL DEFAULT 0 AFTER `reg_id`;
+TABLE `$db`.`$location_table` 
+ADD COLUMN `simultaneous_calls` INT(10) NULL DEFAULT 0 AFTER `reg_id`,
+ADD INDEX `simultaneous_calls` (`simultaneous_calls` ASC);
 EOF
 
 $query{'check_dialog_from_kamctl'} = <<EOF;
@@ -208,7 +210,7 @@ my $create = shift;
 
 if( defined($create) && $create eq "dbinit")
 {
-	print "Адаптация схемы $db, введите root пароль:";
+	print "Адаптация схемы $db, введит root пароль:";
 	
 	ReadMode('noecho');
 	chomp(my $root_password = <STDIN>);
@@ -219,9 +221,9 @@ if( defined($create) && $create eq "dbinit")
 	
 	my $sth=$dbh_db_init->prepare($query{'simultaneous_calls'});
 	$sth->execute() or $tools->logprint("error","Error: ошибка выполнения запроса $query{'simultaneous_calls'}");
-	my $column = $sth->fetchrow_array();
+	my $simultaneous_calls_ref = $sth->fetchrow_hashref();
 	$sth->finish();
-	if(!defined($column))
+	if(!defined($simultaneous_calls_ref->{COLUMN_NAME}))
 	{
 		print "Таблица $db.locations не содержит поле simultaneous_calls\n";
 		$dbh_db_init->do($query{'add_simultaneous_calls_column'}) or die "Error: не удается выполнить запрос $query{'add_simultaneous_calls_column'} $!\n";
@@ -308,10 +310,11 @@ while(1)
 
 			$to_username=$to_uri;
 			$to_username=~s/^sip:(.+)\@.+$/$1/;
-
-			$tools->logprint("info","диалог:  $state $callid $from_uri $from_username $to_uri $to_username");
-			$dbh->do($query{'insert_dialog'},undef,$callid,$from_uri,$from_username,$to_uri,$to_username,$state,$state) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'insert_dialog'}");
-
+			if($state!=5)
+			{
+				$tools->logprint("info","диалог:  $state $callid $from_uri $from_username $to_uri $to_username");
+				$dbh->do($query{'insert_dialog'},undef,$callid,$from_uri,$from_username,$to_uri,$to_username,$state,$state) or $tools->logprint("error","Error: ошибка выполнения запроса $query{'insert_dialog'}");
+			}
 
 		}	
 	}
