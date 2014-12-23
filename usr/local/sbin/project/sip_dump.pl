@@ -30,7 +30,7 @@ use Logic::Tools;
 use File::stat;
 use File::Copy;
 
-my $lock_file = '/var/run/check_location.pid';
+my $lock_file = '/var/run/sip_dump.pid';
 my $runas_user = 'root';
 
 my $tools = Logic::Tools -> new(config_file =>  '/etc/project/sip-dump.ini',
@@ -93,8 +93,16 @@ while(1)
             $tcpdump_fork_pid=undef;
         }
         #my @files_list = ;
-        
-        foreach(glob($dump_dir.'/*'))
+        my @pcap_files=glob($dump_dir.'/*.pcap*');
+
+        if(scalar(@pcap_files)==0)
+        {
+            $tools->logprint("error","не обнаружен PCAP файл");
+            kill("TERM",$tcpdump_fork_pid);
+            exit;
+        }
+
+        foreach(@pcap_files)
         {
             #получаем информацию о файле
             my $statfile = stat($_);
@@ -136,7 +144,16 @@ while(1)
                     mkdir($dump_dir."/$2/$3/$4/$5");
                 }
 
-                move("$_", $dump_dir."/$2/$3/$4/$5/".$1) or die "не удалост перенести файл $_ -> ".$dump_dir."/$2/$3/$4/$5/".$1."\n";
+                if(move("$_", $dump_dir."/$2/$3/$4/$5/".$1))
+                {
+                    $tools -> logprint("info","перемещен файл $_ -> ".$dump_dir."/$2/$3/$4/$5/".$1);
+                }
+                else
+                {
+                    $tools -> logprint("error","не удалост перенести файл $_ -> ".$dump_dir."/$2/$3/$4/$5/".$1);
+                    kill("TERM",$tcpdump_fork_pid);
+                    exit;
+                }
             }
         }
     }
