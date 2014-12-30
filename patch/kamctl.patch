@@ -1,0 +1,17 @@
+--- /usr/sbin/kamctl	2014-12-29 12:57:35.209609884 +0200
++++ /usr/sbin/kamctl	2014-12-30 15:20:28.381707358 +0200
+@@ -16,12 +16,12 @@
+ ### include config files
+ 
+ # check for rc file at same location with kamctl
+-which greadlink &> /dev/null
++which greadlink > /dev/null
+ ret=$?
+ if [ $ret -eq 0 ] ; then
+ 	KAMCTLFULLPATH=$(greadlink -f "$0")
+ else
+-	which readlink &> /dev/null
++	which readlink > /dev/null
+ 	ret=$?
+ 	if [ $ret -eq 0 ] ; then
+ 		KAMCTLFULLPATH=$(readlink -f "$0")
