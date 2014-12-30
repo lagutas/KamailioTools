@@ -26,6 +26,7 @@ my $tools=Logic::Tools->new(config_file =>  '/etc/project/check-asterisk-nodes.i
 
 my $db_host=$tools->read_config( 'check_asterisk_nodes', 'db_host');
 my $db=$tools->read_config( 'check_asterisk_nodes', 'db');
+my $dispatcher_table=$tools->read_config( 'check_asterisk_nodes', 'dispatcher_table');
 my $db_user=$tools->read_config( 'check_asterisk_nodes', 'db_user');
 my $db_password=$tools->read_config( 'check_asterisk_nodes', 'db_password');
 my $my_host=$tools->read_config('check_asterisk_nodes','my_host');
@@ -50,28 +51,28 @@ SELECT
     description,
     destination
 FROM
-    $db.k_dispatcher
+    $db.$dispatcher_table
 WHERE
     setid_previous=?;
 EOQ
 
 # asterisk_disable - выводиv asterisk ноду из балансировки
 $query{'asterisk_disable'} = <<EOQ;
-UPDATE $db.k_dispatcher SET setid = 0 WHERE description=? and setid_previous=?;
+UPDATE $db.$dispatcher_table SET setid = 0 WHERE description=? and setid_previous=?;
 EOQ
 
 # asterisk_set_disable_status - меняем статус на 2, т.к. с asterisk-ом что-то не то
 $query{'asterisk_set_disable_status'} = <<EOQ;
-UPDATE k_dispatcher SET status=2 WHERE description=? and setid_previous=?;
+UPDATE $db.$dispatcher_table SET status=2 WHERE description=? and setid_previous=?;
 EOQ
 
 # asterisk_enable - вводим в балансировку, меняем setid на установленный по умолчанию setid_previous
 $query{'asterisk_enable'} = <<EOQ;
-UPDATE k_dispatcher SET setid = setid_previous WHERE description=? and setid_previous=?;
+UPDATE $db.$dispatcher_table SET setid = setid_previous WHERE description=? and setid_previous=?;
 EOQ
 
 $query{'asterisk_set_enable_status'} = <<EOQ;
-UPDATE k_dispatcher SET status=1 WHERE description=? and setid_previous=?;
+UPDATE $db.$dispatcher_table SET status=1 WHERE description=? and setid_previous=?;
 EOQ
 
 #проверка не запущен ли этот процесс
@@ -87,7 +88,7 @@ eval
 };
 if ($@) 
 {
-    die "Error: не удается подключиться к базе данных $db $db_host $db_user $db_password $DBI::errstr\n";
+    die "Error: не удается подключиться к базе данных $db $db_host $db_user $DBI::errstr\n";
 }
 $dbh->{mysql_auto_reconnect} = 1;
 
@@ -105,7 +106,7 @@ while(1)
         
         foreach my $key (keys   %$asterisk_nodes)
         {
-            $tools->logprint("info","seid $key - $$asterisk_nodes{$key}->{SETID}");
+            $tools->logprint("info","setid $key - $$asterisk_nodes{$key}->{SETID}");
             $tools->logprint("info","setid_previous $key - $$asterisk_nodes{$key}->{SETID_PREVIOUS}");
             $tools->logprint("info","status $key - $$asterisk_nodes{$key}->{STATUS}");
 
