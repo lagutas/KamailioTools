@@ -61,7 +61,6 @@ use DBI();
 use Time::HiRes qw(gettimeofday tv_interval);
 use POSIX qw(strftime);
 use POSIX;
-use Term::ReadKey;
 
 use Logic::Tools;
 
